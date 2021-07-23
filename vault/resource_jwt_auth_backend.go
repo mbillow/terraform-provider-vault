@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
@@ -23,6 +24,7 @@ func jwtAuthBackendResource() *schema.Resource {
 
 		CustomizeDiff: jwtCustomizeDiff,
 
+		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 
 			"path": {
@@ -161,7 +163,154 @@ func jwtAuthBackendResource() *schema.Resource {
 			},
 			"tune": authMountTuneSchema(),
 		},
+		StateUpgraders: []schema.StateUpgrader{
+			{
+				Type:    resourceJwtAuthResourceV0().CoreConfigSchema().ImpliedType(),
+				Upgrade: resourceJwtAuthStateUpgradeV0,
+				Version: 0,
+			},
+		},
 	}
+}
+
+func resourceJwtAuthResourceV0() *schema.Resource {
+	return &schema.Resource{
+		Schema: map[string]*schema.Schema{
+			"path": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				Description:  "path to mount the backend",
+				Default:      "jwt",
+				ValidateFunc: validateNoTrailingSlash,
+			},
+
+			"type": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				Description:  "Type of backend. Can be either 'jwt' or 'oidc'",
+				Default:      "jwt",
+				ValidateFunc: validation.StringInSlice([]string{"jwt", "oidc"}, false),
+			},
+
+			"description": {
+				Type:        schema.TypeString,
+				Required:    false,
+				ForceNew:    true,
+				Optional:    true,
+				Description: "The description of the auth backend",
+			},
+
+			"oidc_discovery_url": {
+				Type:          schema.TypeString,
+				Optional:      true,
+				ConflictsWith: []string{"jwks_url", "jwt_validation_pubkeys"},
+				Description:   "The OIDC Discovery URL, without any .well-known component (base path). Cannot be used with 'jwks_url' or 'jwt_validation_pubkeys'.",
+			},
+
+			"oidc_discovery_ca_pem": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The CA certificate or chain of certificates, in PEM format, to use to validate connections to the OIDC Discovery URL. If not set, system certificates are used",
+			},
+
+			"oidc_client_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Client ID used for OIDC",
+			},
+
+			"oidc_client_secret": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Sensitive:   true,
+				Description: "Client Secret used for OIDC",
+			},
+
+			"jwks_url": {
+				Type:          schema.TypeString,
+				Optional:      true,
+				ConflictsWith: []string{"oidc_discovery_url", "jwt_validation_pubkeys"},
+				Description:   "JWKS URL to use to authenticate signatures. Cannot be used with 'oidc_discovery_url' or 'jwt_validation_pubkeys'.",
+			},
+
+			"jwks_ca_pem": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The CA certificate or chain of certificates, in PEM format, to use to validate connections to the JWKS URL. If not set, system certificates are used.",
+			},
+
+			"jwt_validation_pubkeys": {
+				Type:          schema.TypeList,
+				Elem:          &schema.Schema{Type: schema.TypeString},
+				Optional:      true,
+				ConflictsWith: []string{"jwks_url", "oidc_discovery_url"},
+				Description:   "A list of PEM-encoded public keys to use to authenticate signatures locally. Cannot be used with 'jwks_url' or 'oidc_discovery_url'. ",
+			},
+
+			"bound_issuer": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The value against which to match the iss claim in a JWT",
+			},
+
+			"jwt_supported_algs": {
+				Type:        schema.TypeList,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Optional:    true,
+				Description: "A list of supported signing algorithms. Defaults to [RS256]",
+			},
+
+			"default_role": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The default role to use if none is provided during login",
+			},
+
+			"accessor": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The accessor of the JWT auth backend",
+			},
+			"provider_config": {
+				Type:        schema.TypeMap,
+				Optional:    true,
+				Description: "Provider specific handling configuration",
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+			},
+		},
+	}
+}
+
+func resourceJwtAuthStateUpgradeV0(rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+	if v, ok := rawState["fetch_groups"]; ok {
+		valBool, err := strconv.ParseBool(v.(string))
+		if err != nil {
+			return rawState, fmt.Errorf("could not convert fetch_groups to bool: %s", err)
+		}
+		rawState["fetch_groups"] = valBool
+	}
+
+	if v, ok := rawState["fetch_user_info"]; ok {
+		valBool, err := strconv.ParseBool(v.(string))
+		if err != nil {
+			return rawState, fmt.Errorf("could not convert fetch_user_info to bool: %s", err)
+		}
+		rawState["fetch_user_info"] = valBool
+	}
+
+	if v, ok := rawState["groups_recurse_max_depth"]; ok {
+		valBool, err := strconv.ParseInt(v.(string), 10, 64)
+		if err != nil {
+			return rawState, fmt.Errorf("could not convert groups_recurse_max_depth to int: %s", err)
+		}
+		rawState["groups_recurse_max_depth"] = valBool
+	}
+
+	return rawState, nil
 }
 
 func jwtCustomizeDiff(d *schema.ResourceDiff, meta interface{}) error {
